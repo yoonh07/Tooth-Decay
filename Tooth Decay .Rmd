@@ -1,0 +1,327 @@
+---
+title: "Data cleaning, Tabular Formation, Chi-Squared Testing"
+author: "Yoonhee Cha"
+date: "`17/04/2024`"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(skimr)
+library(naniar)
+library(visdat)
+library(knitr)
+library(kableExtra)
+library(rmarkdown)
+```
+
+## Load data
+
+```{r}
+#control_df <- read_csv("control_all.csv")%>%
+#                           clean_names()
+
+pan_df <- read_excel("tooth_data.xlsx")%>%
+                            clean_names()
+```
+Plan:
+
+1. Get the data to tidy - every column is a variable
+2. Then join on the study_id column
+
+
+## Review (high level)
+
+```{r, eval = FALSE}
+# this took SO long I turned it off
+#skim(control_df)
+```
+
+```{r, eval = FALSE}
+#skim(pan_df)
+```
+
+
+Unique study participants and their groups:
+
+```{r}
+
+## Note I checked that number of unique IDs is equal to number of rows. When this is not the case(as below) this is a bit trickier
+
+n <- length(unique(pan_df$study_id))
+
+
+tab_cc <- pan_df %>%
+          group_by(case_control)%>%
+            summarise(n = n())
+
+tab_gender <- pan_df %>%
+                  group_by(case_control, gender)%>%
+                      summarise(n= n())
+```
+
+There are `r n` unique study IDs in the `pan_df` dataset.
+
+
+```{r}
+tab_cc %>%
+  kable(caption = 
+          "Case control breakdown")%>%
+  kable_styling()
+```
+
+
+```{r}
+tab_gender %>%
+ 
+  kable(caption = 
+          "Case control and gender")%>%
+  kable_styling()
+```
+
+## Make tidy.
+
+This data is messy AF.
+
+Alot of the columns can be moved from wide - long as they are just different outcomes of one variable.
+
+Starting with `pan_df` becauase it's smaller.
+
+The trick is `pivot_longer()`. I'm going to spell this out for you because it's handy!
+
+
+First - let's find out what we're in for here
+```{r}
+
+# Any columns that are completely missing?
+
+vis_dat(pan_df)
+```
+
+There's a whole bunch of columns towards the end that are missing. I'm going to subset the dataframe to the last 25% of columns(or whatever is convenient) so we can get a closer look.
+
+```{r}
+
+pan_df[,35:ncol(pan_df)]%>%
+          vis_dat()
+
+```
+
+OK so everything from `..60` to `congenitally_missing_48` is completely empty. We'll get rid of those - no variation to speak of.
+
+Looks like `high_bp` is missing a lot too.
+
+Let's start with thyroid variables. We can get this into one variable - column name thyroid with values being the thyroid_ variables and a column name `thyroid_issue_present` for the row values from the original one.
+
+The 'algorithm' is to pick columns that could be grouped together as one variable and make them into just two - column names and their values.
+
+Where I find that the text is repetitive I go in and do a bit of tidying up there.
+
+
+```{r} 
+pan_long <- pan_df %>%
+                select(-(x60:congenitally_missing_48))%>%
+                pivot_longer(cols = thyroid_condition:unknown_thyroid_type, # columns to be switched from wide to long
+                             names_to = "thyroid_condition", # what we call the column containing the names of the original column
+                             values_to = "thyroid_condition_present")%>% # column we will put the values in.
+                pivot_longer(teeth_anomalies:transposed_teeth, #here is where something went wrong --> needs to be anomalies but in tooth_anomalies, the tooth_damage data is populating --> why?
+                             names_to = "tooth_anomalies_type",
+                             values_to = "tooth_condition_present")%>% # let's clean these up a little so it's easier to understand but different from tooth
+                mutate(tooth_anomalies_type = str_remove_all(tooth_anomalies_type, "teeth_"),
+                       tooth_anomalies_type = str_remove_all(tooth_anomalies_type, "_teeth"),
+                       tooth_anomalies_type = str_replace_all(tooth_anomalies_type, "_", " "))%>%
+                pivot_longer(caries:tooth_grinding, #Tooth damage overall frequency T to X
+                             names_to = "tooth_damage_type",
+                             values_to = "tooth_damage_present")%>%
+                mutate(tooth_damage_type = str_remove_all(tooth_damage_type, "tooth"),
+                       tooth_damage_type = str_replace_all(tooth_damage_type, "_", " "))%>%
+                pivot_longer(any_perio_bone_loss:any_bone_pathology,
+                             names_to = "bone_loss_condition",
+                             values_to = "bone_condition_present")%>%
+                mutate(bone_loss_condition = str_remove_all(bone_loss_condition, "bone_loss"),
+                       bone_loss_condition = str_replace_all(bone_loss_condition, "_", " "),
+                       bone_loss_condition = str_replace_all(bone_loss_condition, "-", " "),
+                       bone_loss_condition = str_remove_all(bone_loss_condition, "general_"),)%>%
+                pivot_longer(l_carotid_calcification:stylo_hyoid_calcification,
+                             names_to = "calcification",
+                             values_to = "calcification_present")%>%
+                mutate(calcification = str_remove_all(calcification, "_calcification"),
+                       calcification = str_replace_all(calcification, "_", " "))%>%
+                pivot_longer(l_throid_calc:r_thyroid_calc,
+                             names_to = "thyroid_calc_location",
+                             values_to = "thyroid_calc")%>%
+                mutate(thyroid_calc_location = str_remove_all(thyroid_calc_location, "_thyroid_calc"))%>%
+                # pivot_longer(c(osteoporosis_risk:osteo_risk_level, osteoporosis_or_osteopaenia),
+                #              names_to = "osteoporosis_condition",
+                #              values_to = "osteoporosis_present") %>%
+                #  pivot_longer(any_cardiovascular:high_cholesterol,
+                #               names_to = "heart_bp_condition",
+                #               values_to = "heart_condition_presence")%>% #commented this section out bc not necessary for analysis and was making the function unable to run
+                  distinct()
+```
+
+
+! Warning:! this data is now very long. So the `study_id` will be repeated many times. Bear this in mind when you are making tables etc.
+
+
+```{r trying frequency tables}
+# tab <- pan_long %>%
+#   select(study_id, case_control, tooth_anomalies, tooth_condition_present)%>%
+#   distinct()%>% ### just count the distinct IDs
+#   filter(tooth_condition_present %in% c("Yes", "No")) %>%
+#   group_by(tooth_anomalies, case_control, tooth_condition_present)%>%
+#   summarise(n = n())%>%
+#   ungroup()
+# 
+# # check sums to 183
+# 
+# tab <- tab %>%
+#   group_by(tooth_anomalies) %>%
+#   mutate(percentage = round(n/sum(n) * 100, 3),
+#          cumulative_percentage = round(cumsum(percentage),3))
+# 
+# #tab %>%
+# #  summarise(n = sum(n)) check passed
+# 
+# tab%>%
+#   kable(caption = "Frequency of tooth anomalies")%>%
+#   kable_styling()
+```
+
+\usepackage{caption}
+\captionsetup[table]{labelformat=empty}
+
+## DAMAGE
+```{r tooth damage freq table}
+
+tab <- pan_long %>%
+  select(study_id, case_control, tooth_damage_type, tooth_damage_present)%>%
+  distinct()%>% ### just count the distinct IDs
+  #filter(tooth_condition_present %in% c("Yes", "No")) %>%
+  group_by(tooth_damage_type, case_control, tooth_damage_present)%>%
+  summarise(n = n())%>%
+  ungroup()
+
+tab <- tab %>%
+  group_by(tooth_damage_type) %>%
+  mutate(percentage = paste0(round(n/sum(n) * 100), "%"),
+         cumulative_percentage = paste0(round(cumsum(n/sum(n)*100)), "%"))
+  
+#tab %>%
+#  summarise(n = sum(n)) check passed
+
+tab%>%
+  kable(caption = "Frequency of tooth damage", row.names = FALSE)%>%
+  kable_styling()
+```
+
+Question  - should checked / unchecked be removed? Or should it be Yes, No, unchecked?
+
+```{r}
+# DONT NEED TO CHECK FOR DAMAGE BECAUSE DAMAGE IS JUST A YES/NO
+#library(MASS)
+# check_df <- pan_long %>%
+#                 select(tooth_condition_present, study_id)%>%
+#                 distinct()%>%
+#                 filter(tooth_condition_present %in% c("Checked", "Unchecked"))%>%
+#                 group_by(tooth_condition_present)%>%
+#                 summarise(n = n())%>%
+#                 ungroup()
+# 
+# 
+# check_df
+```
+
+
+
+```{r}
+
+check_df <- pan_long %>%
+                select(tooth_condition_present, study_id)%>%
+                distinct()%>%
+                filter(tooth_condition_present %in% c("Yes", "No"))%>%
+                group_by(tooth_condition_present)%>%
+                summarise(n = n())%>%
+                ungroup()
+
+
+check_df
+```
+
+It looks like every single study ID has been both checked and not checked? This will need some investigating and then probably something removed. The yes/no combination adds up to the correct study numbers. I would advise filtering out checked /unchecked as it's really not relevant anyway.
+
+
+## PERIO
+```{r perio freq table}
+tab_bone <- pan_long %>%
+  select(study_id, case_control, bone_loss_condition, bone_condition_present)%>%
+  distinct()%>% ### just count the distinct IDs
+  filter(bone_loss_condition == "any perio ") %>%
+  group_by(bone_loss_condition, case_control, bone_condition_present)%>%
+  summarise(n = n())%>%
+  ungroup()
+
+tab_bone <- tab_bone %>%
+  group_by(bone_loss_condition) %>%
+  mutate(percentage = paste0(round(n/sum(n) * 100), "%"),
+         cumulative_percentage = paste0(round(cumsum(n/sum(n)*100)), "%"))
+  
+#tab %>%
+#  summarise(n = sum(n)) check passed
+
+tab_bone%>%
+  kable(caption = "Frequency of periodontal conditions", row.names = FALSE)%>%
+  kable_styling()
+```
+
+## ANOMALIES
+
+```{r anomaly damage freq table}
+tab_anomaly <- pan_long %>%
+  select(study_id, case_control, tooth_anomalies_type, tooth_condition_present)%>%
+  distinct()%>% ### just count the distinct IDs
+  filter(tooth_condition_present %in% c("Yes", "No")) %>%
+  group_by(tooth_anomalies_type, case_control, tooth_condition_present)%>%
+  summarise(n = n())%>%
+  ungroup()
+
+tab_anomaly <- tab_anomaly %>%
+  group_by(tooth_anomalies_type) %>%
+  mutate(percentage = paste0(round(n/sum(n) * 100), "%"),
+         cumulative_percentage = paste0(round(cumsum(n/sum(n)*100)), "%"))
+  
+#tab %>%
+#  summarise(n = sum(n)) check passed
+
+tab_anomaly%>%
+  kable(caption = "Frequency of tooth anomalies", row.names = FALSE)%>%
+  kable_styling()
+```
+## CHISQ TESTS
+```{r chisq test}
+#install.packages("gplots")
+#library(gplots)
+
+# do we need to do both right and left side? --> with cleaned data right and left are in the same column so would have to investigate further to determine how to do this...
+chisq <- chisq.test(pan_long$thyroid_condition_present,pan_long$thyroid_calc)
+chisq
+
+# right <- chisq.test(pan_long$thyroid_condition,tooth_data$r_thyroid_calc) #right side gave warning that chi-sq approx may be incorrect so did fishers exact
+# left$expected
+# fisher.test(tooth_data$thyroid_condition,tooth_data$l_throid_calc)
+# fisher.test(table(tooth_data$thyroid_condition,tooth_data$r_thyroid_calc))
+```
+
+
+```{r as word doc}
+#render("Steph_Eva_work.Rmd", output_format = "word_document")
+```
